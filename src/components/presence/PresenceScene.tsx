@@ -52,13 +52,13 @@ export function PresenceScene() {
         <OrbCore />
         <WaveSphere />
 
-        {config?.enablePostProcessing && (
+        {false && config?.enablePostProcessing && (
           <EffectComposer multisampling={0}>
             {config.enableBloom && (
               <Bloom
-                intensity={3.5}
-                luminanceThreshold={0.05}
-                luminanceSmoothing={0.8}
+                intensity={0.8}
+                luminanceThreshold={0.6}
+                luminanceSmoothing={0.9}
                 mipmapBlur
               />
             )}

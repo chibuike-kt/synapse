@@ -232,13 +232,14 @@ export function WaveSphere() {
             color = mix(color, vec3(0.1, 0.2, 0.6), 0.5);
           }
 
-          float alpha = soft * v_alpha;
+          float alpha = soft * v_alpha * 1.8;
+          alpha = clamp(alpha, 0.0, 1.0);
           gl_FragColor = vec4(color, alpha);
         }
       `,
       transparent: true,
       depthWrite: false,
-      blending: THREE.AdditiveBlending,
+      blending: THREE.NormalBlending,
     });
 
     return { positions: basePositions, geometry: geo, material: mat };
