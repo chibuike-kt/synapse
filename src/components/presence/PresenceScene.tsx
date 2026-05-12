@@ -9,37 +9,47 @@ import {
   Vignette,
 } from "@react-three/postprocessing";
 import { BlendFunction } from "postprocessing";
-import { Suspense } from "react";
+import { Suspense, useMemo } from "react";
+import { Color, Vector2 } from "three";
 import { getTierConfig } from "@/lib/hardware-tier";
 import { ParticleField } from "./ParticleField";
 import { OrbCore } from "./OrbCore";
-import { Vector2 } from "three";
-
-const config = typeof window !== "undefined" ? getTierConfig() : null;
 
 export function PresenceScene() {
-  const tier = config;
+  const config = useMemo(() => {
+    if (typeof window === "undefined") return null;
+    return getTierConfig();
+  }, []);
+
+  const sceneBackground = useMemo(() => new Color("#03040a"), []);
 
   return (
     <Canvas
       camera={{ position: [0, 0, 2.8], fov: 45, near: 0.1, far: 100 }}
-      dpr={tier?.pixelRatio ?? 2}
+      dpr={config?.pixelRatio ?? 2}
+      scene={{ background: sceneBackground }}
       gl={{
-        antialias: false, // postprocessing handles AA
-        alpha: true,
+        antialias: false,
+        alpha: false,
         powerPreference: "high-performance",
         stencil: false,
         depth: true,
       }}
-      style={{ position: "fixed", inset: 0, background: "transparent" }}
+      style={{
+        position: "fixed",
+        top: 0,
+        left: 0,
+        width: "100vw",
+        height: "100vh",
+      }}
     >
       <Suspense fallback={null}>
         <OrbCore />
         <ParticleField />
 
-        {tier?.enablePostProcessing && (
+        {config?.enablePostProcessing && (
           <EffectComposer multisampling={0}>
-            {tier.enableBloom && (
+            {config.enableBloom && (
               <Bloom
                 intensity={0.4}
                 luminanceThreshold={0.6}
@@ -47,7 +57,7 @@ export function PresenceScene() {
                 mipmapBlur
               />
             )}
-            {tier.enableChromaticAberration && (
+            {config.enableChromaticAberration && (
               <ChromaticAberration
                 blendFunction={BlendFunction.NORMAL}
                 offset={new Vector2(0.0008, 0.0008)}
