@@ -21,11 +21,11 @@ export function PresenceScene() {
     return getTierConfig();
   }, []);
 
-  const bg = useMemo(() => new Color("#03040a"), []);
+  const bg = useMemo(() => new Color("#020408"), []);
 
   return (
     <Canvas
-      camera={{ position: [0, 0, 3.2], fov: 42, near: 0.1, far: 100 }}
+      camera={{ position: [0, 0, 2.8], fov: 55, near: 0.1, far: 100 }}
       dpr={Math.min(config?.pixelRatio ?? 1.5, 2)}
       scene={{ background: bg }}
       gl={{
@@ -52,22 +52,14 @@ export function PresenceScene() {
         <OrbCore />
         <WaveSphere />
 
-        {false && config?.enablePostProcessing && (
+        {config?.enablePostProcessing && (
           <EffectComposer multisampling={0}>
             {config.enableBloom && (
               <Bloom
-                intensity={0.8}
-                luminanceThreshold={0.6}
+                intensity={1.4}
+                luminanceThreshold={0.3}
                 luminanceSmoothing={0.9}
                 mipmapBlur
-              />
-            )}
-            {config.enableChromaticAberration && (
-              <ChromaticAberration
-                blendFunction={BlendFunction.NORMAL}
-                offset={new Vector2(0.0006, 0.0006)}
-                radialModulation={false}
-                modulationOffset={0}
               />
             )}
             <Noise opacity={0.032} blendFunction={BlendFunction.ADD} />
