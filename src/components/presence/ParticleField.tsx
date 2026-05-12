@@ -1,10 +1,10 @@
 "use client";
 
-import { useRef, useMemo, useEffect } from "react";
+import { useRef, useMemo, useEffect, useState } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import { usePresenceStore } from "@/store/presence-store";
-import { buildVoxelFace, VoxelTile } from "@/lib/face-geometry";
+import { sampleFaceImage, VoxelTile } from "@/lib/face-sampler";
 
 const STATE_INT: Record<string, number> = {
   dormant: -1,
@@ -18,130 +18,53 @@ const STATE_INT: Record<string, number> = {
   alert: 7,
 };
 
-// Tile size in world units — tweak for pixel density feel
-const TILE_SIZE = 0.038;
+// World-space tile size — matches sample grid density
+const WORLD_TILE = 0.034;
 
 export function ParticleField() {
+  const [tiles, setTiles] = useState<VoxelTile[]>([]);
   const meshRef = useRef<THREE.InstancedMesh>(null);
+  const dummy = useMemo(() => new THREE.Object3D(), []);
 
-  const tiles = useMemo(() => buildVoxelFace(), []);
+  const currentPos = useRef<Float32Array>(new Float32Array(0));
+  const velocity = useRef<Float32Array>(new Float32Array(0));
+
+  // Load and sample face image on mount
+  useEffect(() => {
+    const img = new Image();
+    img.onload = () => {
+      const result = sampleFaceImage(img);
+      const count = result.tiles.length;
+
+      currentPos.current = new Float32Array(count * 3);
+      velocity.current = new Float32Array(count * 3);
+
+      result.tiles.forEach((tile, i) => {
+        currentPos.current[i * 3 + 0] = tile.wx;
+        currentPos.current[i * 3 + 1] = tile.wy;
+        currentPos.current[i * 3 + 2] = (tile.brightness - 0.5) * 0.15;
+      });
+
+      setTiles(result.tiles);
+    };
+    img.onerror = () =>
+      console.error("[ParticleField] Failed to load /face.jpg");
+    img.src = "/face.jpg";
+  }, []);
+
   const count = tiles.length;
 
-  // Per-instance dynamic data — mutated every frame, never React state
-  const currentPos = useRef<Float32Array>(new Float32Array(count * 3));
-  const velocity = useRef<Float32Array>(new Float32Array(count * 3));
-  const phases = useRef<Float32Array>(new Float32Array(count));
-
-  // Reusable objects — allocated once, reused every frame
-  const dummy = useMemo(() => new THREE.Object3D(), []);
-  const colorObj = useMemo(() => new THREE.Color(), []);
-
-  // Shader material for instanced quads
-  const material = useMemo(
-    () =>
-      new THREE.ShaderMaterial({
-        uniforms: {
-          u_time: { value: 0 },
-          u_amplitude: { value: 0 },
-          u_energy: { value: 0.5 },
-          u_state: { value: 0 },
-          u_stateBlend: { value: 1.0 },
-        },
-        vertexShader: /* glsl */ `
-      attribute float a_brightness;
-      attribute float a_phase;
-
-      uniform float u_time;
-      uniform float u_amplitude;
-      uniform float u_energy;
-      uniform int u_state;
-
-      varying float v_brightness;
-      varying float v_alpha;
-
-      void main() {
-        v_brightness = a_brightness;
-
-        // Alpha — core tiles fully opaque, edge tiles semi-transparent
-        float baseAlpha = smoothstep(0.03, 0.4, a_brightness);
-        v_alpha = baseAlpha * (0.7 + u_energy * 0.3);
-
-        // Listening: edge tiles pulled slightly inward (attention)
-        // Speaking: tiles push out with amplitude
-        vec3 pos = (instanceMatrix * vec4(position, 1.0)).xyz;
-
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
-      }
-    `,
-        fragmentShader: /* glsl */ `
-      uniform float u_time;
-      uniform float u_energy;
-      uniform int u_state;
-
-      varying float v_brightness;
-      varying float v_alpha;
-
-      void main() {
-        // Square tile — no discard needed, PlaneGeometry is already square
-
-        // Base palette: cool white → silver-gray
-        vec3 brightColor = vec3(0.96, 0.97, 1.00);   // near-white core
-        vec3 midColor    = vec3(0.72, 0.78, 0.88);   // silver-gray mid
-        vec3 edgeColor   = vec3(0.45, 0.52, 0.62);   // dark steel edge
-
-        vec3 color;
-        if (v_brightness > 0.65) {
-          color = mix(midColor, brightColor, (v_brightness - 0.65) / 0.35);
-        } else if (v_brightness > 0.25) {
-          color = mix(edgeColor, midColor, (v_brightness - 0.25) / 0.4);
-        } else {
-          color = edgeColor * (v_brightness / 0.25);
-        }
-
-        // Speaking: push bright tiles toward white
-        if (u_state == 3) {
-          color = mix(color, vec3(1.0), v_brightness * u_energy * 0.5);
-        }
-
-        // Thinking: cool desaturate slightly
-        if (u_state == 2) {
-          float grey = dot(color, vec3(0.299, 0.587, 0.114));
-          color = mix(color, vec3(grey), 0.25);
-        }
-
-        // Searching: subtle blue tint on bright tiles
-        if (u_state == 5) {
-          color = mix(color, vec3(0.6, 0.75, 1.0), v_brightness * 0.3);
-        }
-
-        gl_FragColor = vec4(color, v_alpha);
-      }
-    `,
-        transparent: true,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-        side: THREE.DoubleSide,
-      }),
-    [],
-  );
-
-  // Geometry — one shared PlaneGeometry for all instances
   const geometry = useMemo(() => {
-    const geo = new THREE.PlaneGeometry(TILE_SIZE, TILE_SIZE);
+    if (count === 0) return new THREE.PlaneGeometry(WORLD_TILE, WORLD_TILE);
 
-    // Per-instance attributes
+    const geo = new THREE.PlaneGeometry(WORLD_TILE, WORLD_TILE);
+
     const brightnessArr = new Float32Array(count);
     const phaseArr = new Float32Array(count);
 
     tiles.forEach((tile, i) => {
       brightnessArr[i] = tile.brightness;
-      phaseArr[i] = Math.random() * Math.PI * 2;
-      phases.current[i] = phaseArr[i]!;
-
-      // Set initial positions
-      currentPos.current[i * 3 + 0] = tile.x;
-      currentPos.current[i * 3 + 1] = tile.y;
-      currentPos.current[i * 3 + 2] = tile.z;
+      phaseArr[i] = tile.phase;
     });
 
     geo.setAttribute(
@@ -156,18 +79,90 @@ export function ParticleField() {
     return geo;
   }, [tiles, count]);
 
-  // Set all initial instance matrices
+  const material = useMemo(
+    () =>
+      new THREE.ShaderMaterial({
+        uniforms: {
+          u_time: { value: 0 },
+          u_amplitude: { value: 0 },
+          u_energy: { value: 0.5 },
+          u_state: { value: 0 },
+        },
+        vertexShader: /* glsl */ `
+      attribute float a_brightness;
+      attribute float a_phase;
+      uniform float u_time;
+      uniform float u_energy;
+      uniform int u_state;
+      varying float v_brightness;
+      varying float v_alpha;
+
+      void main() {
+        v_brightness = a_brightness;
+        v_alpha = smoothstep(0.04, 0.45, a_brightness);
+
+        vec4 worldPos = instanceMatrix * vec4(position, 1.0);
+        gl_Position = projectionMatrix * modelViewMatrix * worldPos;
+      }
+    `,
+        fragmentShader: /* glsl */ `
+      uniform float u_time;
+      uniform float u_energy;
+      uniform int u_state;
+      varying float v_brightness;
+      varying float v_alpha;
+
+      void main() {
+        if (v_brightness < 0.04) discard;
+
+        // Cool white → silver → steel gradient by brightness
+        vec3 bright = vec3(0.96, 0.97, 1.00);
+        vec3 mid    = vec3(0.62, 0.70, 0.82);
+        vec3 dark   = vec3(0.28, 0.34, 0.44);
+
+        vec3 color;
+        if (v_brightness > 0.65)
+          color = mix(mid, bright, (v_brightness - 0.65) / 0.35);
+        else if (v_brightness > 0.25)
+          color = mix(dark, mid, (v_brightness - 0.25) / 0.40);
+        else
+          color = dark * (v_brightness / 0.25);
+
+        // State tints
+        if (u_state == 3)
+          color = mix(color, vec3(1.0, 1.0, 1.0), v_brightness * u_energy * 0.55);
+        if (u_state == 2) {
+          float g = dot(color, vec3(0.299, 0.587, 0.114));
+          color = mix(color, vec3(g * 0.9, g * 0.95, g * 1.1), 0.4);
+        }
+        if (u_state == 5)
+          color = mix(color, vec3(0.55, 0.75, 1.0), v_brightness * 0.35);
+        if (u_state == 7)
+          color = mix(color, vec3(1.0, 0.95, 0.85), v_brightness * 0.4);
+
+        gl_FragColor = vec4(color, v_alpha);
+      }
+    `,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+      }),
+    [],
+  );
+
+  // Set initial matrices once tiles load
   useEffect(() => {
-    if (!meshRef.current) return;
+    if (!meshRef.current || count === 0) return;
     tiles.forEach((tile, i) => {
-      dummy.position.set(tile.x, tile.y, tile.z);
+      dummy.position.set(tile.wx, tile.wy, (tile.brightness - 0.5) * 0.15);
       dummy.rotation.set(0, 0, 0);
       dummy.scale.setScalar(1);
       dummy.updateMatrix();
       meshRef.current!.setMatrixAt(i, dummy.matrix);
     });
     meshRef.current.instanceMatrix.needsUpdate = true;
-  }, [tiles, dummy]);
+  }, [tiles, count, dummy]);
 
   useEffect(
     () => () => {
@@ -178,7 +173,7 @@ export function ParticleField() {
   );
 
   useFrame(({ clock }, delta) => {
-    if (!meshRef.current) return;
+    if (!meshRef.current || count === 0) return;
 
     const t = clock.getElapsedTime();
     const store = usePresenceStore.getState();
@@ -186,61 +181,65 @@ export function ParticleField() {
     const energy = store.emotional.energy;
     const urgency = store.emotional.urgency;
 
-    // Update uniforms
-    const u = material.uniforms;
-    u["u_time"]!.value = t;
-    u["u_energy"]!.value = energy;
-    u["u_state"]!.value = stateInt;
+    material.uniforms["u_time"]!.value = t;
+    material.uniforms["u_energy"]!.value = energy;
+    material.uniforms["u_state"]!.value = stateInt;
 
     const pos = currentPos.current;
     const vel = velocity.current;
-    const ph = phases.current;
-
-    // Spring stiffness varies by state
-    const stiffness = 6.0 + urgency * 4.0;
-    const damping = 0.78;
+    const stiffness = 5.0 + urgency * 3.0;
+    const damping = 0.8;
 
     for (let i = 0; i < count; i++) {
       const tile = tiles[i]!;
+      const ph = tile.phase;
+      const b = tile.brightness;
       const ix = i * 3,
         iy = i * 3 + 1,
         iz = i * 3 + 2;
-      const phase = ph[i]!;
 
-      // Breathing — slow sinusoidal displacement along face normal (Z)
-      const breath = Math.sin(t * 0.942 + phase) * 0.006;
+      // Breathing — universal
+      const breath = Math.sin(t * 0.94 + ph) * 0.004;
 
-      // State-driven target offsets
-      let ox = 0,
-        oy = 0,
-        oz = breath;
+      let ox = tile.scatterX;
+      let oy = tile.scatterY + breath;
+      let oz = (b - 0.5) * 0.15;
 
       if (stateInt === 1) {
-        // Listening — subtle inward pull, tiles compress slightly
-        oz -= 0.012 * tile.brightness;
+        // Listening — subtle inward magnetic pull
+        ox += Math.sin(t * 0.8 + ph) * 0.003 * b;
+        oz -= 0.01 * b;
       } else if (stateInt === 2) {
-        // Thinking — individual tile oscillation, higher freq
-        ox = Math.sin(t * 2.1 + phase * 3.0) * 0.004 * tile.brightness;
-        oy = Math.cos(t * 1.8 + phase * 2.5) * 0.004 * tile.brightness;
-        oz += Math.sin(t * 3.0 + phase) * 0.008;
+        // Thinking — individual oscillation, ripple outward
+        ox += Math.sin(t * 2.2 + ph * 3.1) * 0.008 * b;
+        oy += Math.cos(t * 1.8 + ph * 2.4) * 0.008 * b;
+        oz += Math.sin(t * 2.8 + ph) * 0.01;
       } else if (stateInt === 3) {
-        // Speaking — amplitude pushes bright tiles forward
-        const amp = u["u_amplitude"]!.value as number;
-        oz += amp * 0.05 * tile.brightness;
-        ox = Math.sin(t * 4.0 + phase) * amp * 0.006;
+        // Speaking — amplitude-driven push, high frequency micro-shake
+        const amp = 0.5 + 0.5 * Math.sin(t * 7.0);
+        ox += Math.sin(t * 5.0 + ph) * amp * 0.006;
+        oy += amp * 0.012 * b;
+        oz += amp * 0.025 * b;
+      } else if (stateInt === 4) {
+        // Processing — fast scan-line ripple
+        const scan = Math.sin(t * 4.0 - tile.wy * 3.0) * 0.008;
+        ox += scan;
+        oz += scan * 0.5;
       } else if (stateInt === 5) {
-        // Searching — tiles drift in small orbit patterns
-        const orbit = t * 1.2 + phase;
-        ox = Math.sin(orbit) * 0.008;
-        oy = Math.cos(orbit * 0.7) * 0.005;
+        // Searching — slow orbital drift per tile
+        const orbit = t * 1.2 + ph;
+        ox += Math.sin(orbit) * 0.01;
+        oy += Math.cos(orbit * 0.75) * 0.007;
+      } else if (stateInt === 7) {
+        // Alert — fast strobe scatter
+        ox += (Math.random() - 0.5) * 0.012;
+        oy += (Math.random() - 0.5) * 0.012;
       }
 
-      // Target position = rest + scatter + state offset
-      const tx = tile.restX + tile.scatterX + ox;
-      const ty = tile.restY + tile.scatterY + oy;
-      const tz = tile.restZ + tile.scatterZ + oz;
+      const tx = tile.wx + ox;
+      const ty = tile.wy + oy;
+      const tz = oz;
 
-      // Spring physics
       vel[ix] = (vel[ix]! + (tx - pos[ix]!) * stiffness * delta) * damping;
       vel[iy] = (vel[iy]! + (ty - pos[iy]!) * stiffness * delta) * damping;
       vel[iz] = (vel[iz]! + (tz - pos[iz]!) * stiffness * delta) * damping;
@@ -249,7 +248,6 @@ export function ParticleField() {
       pos[iy] = pos[iy]! + vel[iy]!;
       pos[iz] = pos[iz]! + vel[iz]!;
 
-      // Write instance matrix
       dummy.position.set(pos[ix]!, pos[iy]!, pos[iz]!);
       dummy.updateMatrix();
       meshRef.current.setMatrixAt(i, dummy.matrix);
@@ -257,6 +255,8 @@ export function ParticleField() {
 
     meshRef.current.instanceMatrix.needsUpdate = true;
   });
+
+  if (count === 0) return null;
 
   return (
     <instancedMesh

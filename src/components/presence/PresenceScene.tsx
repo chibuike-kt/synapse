@@ -25,7 +25,7 @@ export function PresenceScene() {
 
   return (
     <Canvas
-      camera={{ position: [0, 0, 2.8], fov: 45, near: 0.1, far: 100 }}
+      camera={{ position: [0, 0, 3.2], fov: 42, near: 0.1, far: 100 }}
       dpr={config?.pixelRatio ?? 2}
       scene={{ background: sceneBackground }}
       gl={{
