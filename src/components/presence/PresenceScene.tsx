@@ -45,9 +45,9 @@ export function PresenceScene() {
           <EffectComposer multisampling={0}>
             {config.enableBloom && (
               <Bloom
-                intensity={1.2}
-                luminanceThreshold={0.18}
-                luminanceSmoothing={0.92}
+                intensity={3.5}
+                luminanceThreshold={0.05}
+                luminanceSmoothing={0.8}
                 mipmapBlur
               />
             )}

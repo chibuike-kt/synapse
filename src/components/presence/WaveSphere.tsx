@@ -17,226 +17,232 @@ const STATE_INT: Record<string, number> = {
   alert: 7,
 };
 
+const PARTICLE_COUNT = 18000;
+
+// Fibonacci sphere — evenly distributed points on sphere surface
+function fibonacciSphere(count: number, radius: number): Float32Array {
+  const positions = new Float32Array(count * 3);
+  const golden = Math.PI * (3 - Math.sqrt(5));
+  for (let i = 0; i < count; i++) {
+    const y = 1 - (i / (count - 1)) * 2;
+    const r = Math.sqrt(1 - y * y);
+    const theta = golden * i;
+    positions[i * 3 + 0] = Math.cos(theta) * r * radius;
+    positions[i * 3 + 1] = y * radius;
+    positions[i * 3 + 2] = Math.sin(theta) * r * radius;
+  }
+  return positions;
+}
+
 export function WaveSphere() {
-  const meshRef = useRef<THREE.Mesh>(null);
+  const meshRef = useRef<THREE.Points>(null);
 
-  const uniforms = useMemo(
-    () => ({
-      u_time: { value: 0 },
-      u_amplitude: { value: 0 },
-      u_energy: { value: 0.5 },
-      u_state: { value: 0 },
-      u_blend: { value: 1.0 },
-    }),
-    [],
-  );
+  const { positions, geometry, material } = useMemo(() => {
+    const basePositions = fibonacciSphere(PARTICLE_COUNT, 1.15);
 
-  const { geometry, material } = useMemo(() => {
-    const geo = new THREE.SphereGeometry(1.1, 128, 128);
+    // Per-particle attributes
+    const phases = new Float32Array(PARTICLE_COUNT);
+    const sizes = new Float32Array(PARTICLE_COUNT);
+    const colorSeeds = new Float32Array(PARTICLE_COUNT);
+    const layers = new Float32Array(PARTICLE_COUNT); // 0=surface, 1=inner
+
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+      phases[i] = Math.random() * Math.PI * 2;
+      sizes[i] = 1.5 + Math.random() * 3.5;
+      colorSeeds[i] = Math.random();
+
+      // 85% surface particles, 15% inner depth layer
+      layers[i] = Math.random() < 0.15 ? 1.0 : 0.0;
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute(
+      "position",
+      new THREE.BufferAttribute(basePositions.slice(), 3),
+    );
+    geo.setAttribute("a_base", new THREE.BufferAttribute(basePositions, 3));
+    geo.setAttribute("a_phase", new THREE.BufferAttribute(phases, 1));
+    geo.setAttribute("a_size", new THREE.BufferAttribute(sizes, 1));
+    geo.setAttribute("a_colorSeed", new THREE.BufferAttribute(colorSeeds, 1));
+    geo.setAttribute("a_layer", new THREE.BufferAttribute(layers, 1));
 
     const mat = new THREE.ShaderMaterial({
-      uniforms,
+      uniforms: {
+        u_time: { value: 0 },
+        u_amplitude: { value: 0 },
+        u_energy: { value: 0.5 },
+        u_state: { value: 0 },
+      },
       vertexShader: /* glsl */ `
+        attribute vec3  a_base;
+        attribute float a_phase;
+        attribute float a_size;
+        attribute float a_colorSeed;
+        attribute float a_layer;
+
         uniform float u_time;
         uniform float u_amplitude;
         uniform float u_energy;
-        uniform int u_state;
+        uniform int   u_state;
 
-        varying vec3 v_normal;
-        varying float v_displacement;
-        varying vec3 v_pos;
+        varying float v_colorSeed;
+        varying float v_alpha;
+        varying float v_rim;
+        varying float v_layer;
+        varying float v_dispStrength;
 
-        // 3D noise
-        vec3 mod289(vec3 x) { return x - floor(x * (1.0/289.0)) * 289.0; }
-        vec4 mod289(vec4 x) { return x - floor(x * (1.0/289.0)) * 289.0; }
-        vec4 permute(vec4 x) { return mod289(((x*34.0)+1.0)*x); }
-        vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
-
-        float snoise(vec3 v) {
-          const vec2 C = vec2(1.0/6.0, 1.0/3.0);
-          const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
-          vec3 i = floor(v + dot(v, C.yyy));
-          vec3 x0 = v - i + dot(i, C.xxx);
-          vec3 g = step(x0.yzx, x0.xyz);
-          vec3 l = 1.0 - g;
-          vec3 i1 = min(g.xyz, l.zxy);
-          vec3 i2 = max(g.xyz, l.zxy);
-          vec3 x1 = x0 - i1 + C.xxx;
-          vec3 x2 = x0 - i2 + C.yyy;
-          vec3 x3 = x0 - D.yyy;
-          i = mod289(i);
-          vec4 p = permute(permute(permute(
-            i.z + vec4(0.0, i1.z, i2.z, 1.0))
-            + i.y + vec4(0.0, i1.y, i2.y, 1.0))
-            + i.x + vec4(0.0, i1.x, i2.x, 1.0));
-          float n_ = 0.142857142857;
-          vec3 ns = n_ * D.wyz - D.xzx;
-          vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
-          vec4 x_ = floor(j * ns.z);
-          vec4 y_ = floor(j - 7.0 * x_);
-          vec4 x = x_ *ns.x + ns.yyyy;
-          vec4 y = y_ *ns.x + ns.yyyy;
-          vec4 h = 1.0 - abs(x) - abs(y);
-          vec4 b0 = vec4(x.xy, y.xy);
-          vec4 b1 = vec4(x.zw, y.zw);
-          vec4 s0 = floor(b0)*2.0 + 1.0;
-          vec4 s1 = floor(b1)*2.0 + 1.0;
-          vec4 sh = -step(h, vec4(0.0));
-          vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy;
-          vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww;
-          vec3 p0 = vec3(a0.xy, h.x);
-          vec3 p1 = vec3(a0.zw, h.y);
-          vec3 p2 = vec3(a1.xy, h.z);
-          vec3 p3 = vec3(a1.zw, h.w);
-          vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3)));
-          p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;
-          vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
-          m = m * m;
-          return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
+        // Simplex-style noise
+        float hash(float n) { return fract(sin(n) * 43758.5453); }
+        float noise(vec3 p) {
+          vec3 i = floor(p);
+          vec3 f = fract(p);
+          f = f*f*(3.0-2.0*f);
+          float n = i.x + i.y*57.0 + i.z*113.0;
+          return mix(
+            mix(mix(hash(n),      hash(n+1.0),   f.x),
+                mix(hash(n+57.0), hash(n+58.0),  f.x), f.y),
+            mix(mix(hash(n+113.0),hash(n+114.0), f.x),
+                mix(hash(n+170.0),hash(n+171.0), f.x), f.y),
+            f.z);
+        }
+        float fbm(vec3 p) {
+          return noise(p)*0.5 + noise(p*2.1)*0.25 + noise(p*4.3)*0.125;
         }
 
         void main() {
-          vec3 pos = position;
-          float t = u_time;
+          vec3 base = a_base;
+          vec3 dir  = normalize(base);
+          float t   = u_time;
+          float ph  = a_phase;
 
-          // Base slow breathing
-          float breathSpeed = 0.18;
-          float breath = sin(t * breathSpeed * 6.2831) * 0.018;
+          // Inner layer particles — smaller radius, dimmer
+          float radius = a_layer > 0.5 ? 0.72 : 1.0;
 
-          // Primary wave noise — large undulating surface
-          float n1 = snoise(pos * 1.2 + vec3(t * 0.22, t * 0.18, t * 0.14));
-          float n2 = snoise(pos * 2.8 + vec3(t * 0.38, t * 0.30, t * 0.25));
-          float n3 = snoise(pos * 5.5 + vec3(t * 0.55, t * 0.48, t * 0.60));
-
-          // State-specific wave behavior
+          // State-driven wave displacement
           float waveAmp = 0.0;
+          float waveFreq = 1.0;
           float waveSpeed = 1.0;
-          float detailAmp = 0.0;
 
-          if (u_state == -1) {
-            // Dormant — almost flat, faint pulse
-            waveAmp = 0.012 + breath * 0.5;
-            detailAmp = 0.004;
-          } else if (u_state == 0) {
-            // Idle — gentle slow waves
-            waveAmp = 0.055 + u_energy * 0.02;
-            detailAmp = 0.015;
-            waveSpeed = 0.8;
-          } else if (u_state == 1) {
-            // Listening — surface tightens, focused ripple
-            waveAmp = 0.04 + u_energy * 0.025;
-            detailAmp = 0.022;
-            waveSpeed = 1.3;
-          } else if (u_state == 2) {
-            // Thinking — complex multi-layer interference
-            waveAmp = 0.07 + u_energy * 0.04;
-            detailAmp = 0.035;
-            waveSpeed = 1.8;
-          } else if (u_state == 3) {
-            // Speaking — amplitude-driven, high energy
-            waveAmp = 0.08 + u_amplitude * 0.12 + u_energy * 0.05;
-            detailAmp = 0.04 + u_amplitude * 0.06;
-            waveSpeed = 2.2;
-          } else if (u_state == 4) {
-            // Processing — fast scan ripple
-            waveAmp = 0.06 + u_energy * 0.03;
-            detailAmp = 0.028;
-            waveSpeed = 3.5;
-          } else if (u_state == 5) {
-            // Searching — slow orbital swell
-            waveAmp = 0.065 + u_energy * 0.035;
-            detailAmp = 0.02;
-            waveSpeed = 1.1;
-          } else if (u_state == 7) {
-            // Alert — sharp fast spikes
-            waveAmp = 0.09 + u_energy * 0.06;
-            detailAmp = 0.055;
-            waveSpeed = 4.0;
-          }
+          if (u_state == -1) { waveAmp = 0.015; waveFreq = 1.2; waveSpeed = 0.4; }
+          else if (u_state == 0) { waveAmp = 0.08 + u_energy*0.03;  waveFreq = 1.5; waveSpeed = 0.7; }
+          else if (u_state == 1) { waveAmp = 0.07 + u_energy*0.04;  waveFreq = 2.0; waveSpeed = 1.2; }
+          else if (u_state == 2) { waveAmp = 0.12 + u_energy*0.06;  waveFreq = 2.8; waveSpeed = 1.8; }
+          else if (u_state == 3) { waveAmp = 0.10 + u_amplitude*0.18 + u_energy*0.05; waveFreq = 2.2; waveSpeed = 2.5; }
+          else if (u_state == 4) { waveAmp = 0.09 + u_energy*0.04;  waveFreq = 3.5; waveSpeed = 3.8; }
+          else if (u_state == 5) { waveAmp = 0.10 + u_energy*0.05;  waveFreq = 1.8; waveSpeed = 1.4; }
+          else if (u_state == 7) { waveAmp = 0.16 + u_energy*0.08;  waveFreq = 4.0; waveSpeed = 5.0; }
 
-          float displacement =
-            n1 * waveAmp +
-            n2 * detailAmp +
-            n3 * detailAmp * 0.4 +
-            breath;
+          // Layered noise displacement
+          float n1 = fbm(dir * waveFreq + vec3(t * waveSpeed * 0.18));
+          float n2 = fbm(dir * waveFreq * 2.5 + vec3(t * waveSpeed * 0.28 + ph));
+          float displacement = (n1 * 0.65 + n2 * 0.35) * waveAmp;
 
-          pos += normal * displacement;
-          v_displacement = displacement;
-          v_normal = normalMatrix * normal;
-          v_pos = pos;
+          // Breathing
+          float breath = sin(t * 0.94 + ph) * 0.012;
+          displacement += breath;
 
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+          // Rim particles — scattered outward for turbulent edge
+          // Detect rim: particles near the equator of view (approx by base.z)
+          float rimFactor = 1.0 - abs(dir.z);
+          rimFactor = pow(rimFactor, 2.5);
+
+          // Extra scatter at rim
+          float rimScatter = rimFactor * (0.08 + u_energy * 0.06);
+          float scatterNoise = fbm(dir * 5.0 + vec3(t * 0.5 + ph * 3.0));
+          rimScatter *= scatterNoise;
+
+          vec3 pos = dir * (radius * 1.15 + displacement + rimScatter);
+
+          v_colorSeed  = a_colorSeed;
+          v_rim        = rimFactor;
+          v_layer      = a_layer;
+          v_dispStrength = clamp(displacement / (waveAmp + 0.001), 0.0, 1.0);
+
+          // Alpha — rim particles more visible, inner layer dimmer
+          float baseAlpha = a_layer > 0.5 ? 0.25 : 0.82;
+          float rimBoost  = rimFactor * 0.3;
+          v_alpha = clamp(baseAlpha + rimBoost, 0.0, 1.0);
+
+          // Point size — rim and displaced particles larger
+          float sz = a_size * (1.0 + rimFactor * 1.8 + v_dispStrength * 0.8);
+          if (a_layer > 0.5) sz *= 0.55;
+
+          vec4 mvPos = modelViewMatrix * vec4(pos, 1.0);
+          gl_Position   = projectionMatrix * mvPos;
+          gl_PointSize  = sz * (280.0 / -mvPos.z);
         }
       `,
       fragmentShader: /* glsl */ `
         uniform float u_time;
         uniform float u_energy;
-        uniform int u_state;
-        uniform float u_amplitude;
+        uniform int   u_state;
 
-        varying vec3 v_normal;
-        varying float v_displacement;
-        varying vec3 v_pos;
+        varying float v_colorSeed;
+        varying float v_alpha;
+        varying float v_rim;
+        varying float v_layer;
+        varying float v_dispStrength;
 
         void main() {
-          vec3 n = normalize(v_normal);
+          // Soft circular particle
+          vec2  uv   = gl_PointCoord - 0.5;
+          float dist = length(uv);
+          if (dist > 0.5) discard;
+          float soft = 1.0 - smoothstep(0.15, 0.5, dist);
 
-          // Fake view direction for fresnel (no camera uniform needed)
-          vec3 viewDir = normalize(-v_pos);
-          float fresnel = pow(1.0 - max(0.0, dot(viewDir, n)), 3.0);
+          // Color gradient by seed — matches reference image arc
+          // seed 0.0→0.25 : cyan/blue (top)
+          // seed 0.25→0.55: purple/violet
+          // seed 0.55→0.75: magenta/pink (left)
+          // seed 0.75→1.0 : red/orange/yellow (bottom)
+          vec3 cyan    = vec3(0.10, 0.85, 1.00);
+          vec3 blue    = vec3(0.20, 0.40, 1.00);
+          vec3 violet  = vec3(0.55, 0.15, 1.00);
+          vec3 magenta = vec3(0.95, 0.10, 0.75);
+          vec3 red     = vec3(1.00, 0.08, 0.20);
+          vec3 orange  = vec3(1.00, 0.45, 0.05);
+          vec3 yellow  = vec3(1.00, 0.85, 0.10);
 
-          // Displacement drives brightness — peaks glow, valleys dark
-          float dispNorm = clamp((v_displacement + 0.12) / 0.24, 0.0, 1.0);
-
-          // Base palette: near-black core → silver mid → cold white peaks
-          vec3 coreColor  = vec3(0.04, 0.05, 0.07);
-          vec3 midColor   = vec3(0.55, 0.62, 0.74);
-          vec3 peakColor  = vec3(0.92, 0.95, 1.00);
-          vec3 fresnelColor = vec3(0.80, 0.88, 1.00);
-
-          vec3 baseColor;
-          if (dispNorm > 0.6)
-            baseColor = mix(midColor, peakColor, (dispNorm - 0.6) / 0.4);
-          else if (dispNorm > 0.2)
-            baseColor = mix(coreColor, midColor, (dispNorm - 0.2) / 0.4);
+          vec3 color;
+          float s = v_colorSeed;
+          if (s < 0.18)
+            color = mix(cyan,    blue,    s / 0.18);
+          else if (s < 0.38)
+            color = mix(blue,    violet,  (s-0.18) / 0.20);
+          else if (s < 0.55)
+            color = mix(violet,  magenta, (s-0.38) / 0.17);
+          else if (s < 0.70)
+            color = mix(magenta, red,     (s-0.55) / 0.15);
+          else if (s < 0.85)
+            color = mix(red,     orange,  (s-0.70) / 0.15);
           else
-            baseColor = coreColor;
+            color = mix(orange,  yellow,  (s-0.85) / 0.15);
 
-          // Fresnel edge glow
-          baseColor = mix(baseColor, fresnelColor, fresnel * 0.65);
+          // State color shifts — overlay tint
+          if (u_state == 2) color = mix(color, vec3(0.4, 0.1, 1.0), 0.30);
+          if (u_state == 3) color = mix(color, vec3(0.2, 0.9, 1.0), v_dispStrength * 0.40);
+          if (u_state == 5) color = mix(color, vec3(0.0, 0.8, 1.0), 0.25);
+          if (u_state == 7) color = mix(color, vec3(1.0, 0.2, 0.0), 0.50);
 
-          // State color shifts
-          if (u_state == 2) {
-            // Thinking — subtle blue pulse
-            baseColor = mix(baseColor, vec3(0.70, 0.82, 1.00), dispNorm * 0.25);
-          }
-          if (u_state == 3) {
-            // Speaking — amplitude brightens peaks toward white
-            baseColor = mix(baseColor, vec3(1.0, 1.0, 1.0), dispNorm * u_amplitude * 0.5);
-          }
-          if (u_state == 5) {
-            // Searching — cool teal tint
-            baseColor = mix(baseColor, vec3(0.60, 0.90, 0.95), dispNorm * 0.20);
-          }
-          if (u_state == 7) {
-            // Alert — warm white flash
-            baseColor = mix(baseColor, vec3(1.0, 0.97, 0.90), dispNorm * u_energy * 0.45);
+          // Rim particles get boosted brightness
+          color *= (1.0 + v_rim * 0.7);
+
+          // Inner layer — dimmer, more blue
+          if (v_layer > 0.5) {
+            color = mix(color, vec3(0.1, 0.2, 0.6), 0.5);
           }
 
-          // Alpha — transparent at core, opaque at surface peaks and edges
-          float alpha = clamp(dispNorm * 0.7 + fresnel * 0.55, 0.0, 1.0);
-
-          gl_FragColor = vec4(baseColor, alpha);
+          float alpha = soft * v_alpha;
+          gl_FragColor = vec4(color, alpha);
         }
       `,
       transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
-      side: THREE.FrontSide,
     });
 
-    return { geometry: geo, material: mat };
-  }, [uniforms]);
+    return { positions: basePositions, geometry: geo, material: mat };
+  }, []);
 
   useEffect(
     () => () => {
@@ -246,16 +252,15 @@ export function WaveSphere() {
     [geometry, material],
   );
 
-  useFrame(({ clock }, delta) => {
+  useFrame(({ clock }) => {
     const store = usePresenceStore.getState();
-    uniforms.u_time.value = clock.getElapsedTime();
-    uniforms.u_energy.value = store.emotional.energy;
-    uniforms.u_state.value = STATE_INT[store.state] ?? 0;
+    material.uniforms["u_time"]!.value = clock.getElapsedTime();
+    material.uniforms["u_energy"]!.value = store.emotional.energy;
+    material.uniforms["u_state"]!.value = STATE_INT[store.state] ?? 0;
 
-    // Smooth amplitude decay when no audio (will be driven by Web Audio in Phase 2)
-    const current = uniforms.u_amplitude.value as number;
-    uniforms.u_amplitude.value = current * 0.92;
+    const cur = material.uniforms["u_amplitude"]!.value as number;
+    material.uniforms["u_amplitude"]!.value = cur * 0.9;
   });
 
-  return <mesh ref={meshRef} geometry={geometry} material={material} />;
+  return <points ref={meshRef} geometry={geometry} material={material} />;
 }
