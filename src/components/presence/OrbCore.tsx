@@ -5,22 +5,22 @@ import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import { usePresenceStore } from "@/store/presence-store";
 
-// Ambient backlight — soft sphere glow behind the face
 export function OrbCore() {
   const meshRef = useRef<THREE.Mesh>(null);
+
   const mat = useMemo(
     () =>
       new THREE.MeshBasicMaterial({
-        color: new THREE.Color(0.12, 0.14, 0.18),
+        color: new THREE.Color(0.08, 0.1, 0.16),
         transparent: true,
-        opacity: 0.18,
+        opacity: 0.22,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
       }),
     [],
   );
 
-  const geo = useMemo(() => new THREE.SphereGeometry(0.72, 32, 32), []);
+  const geo = useMemo(() => new THREE.SphereGeometry(1.05, 32, 32), []);
 
   useEffect(
     () => () => {
@@ -31,12 +31,15 @@ export function OrbCore() {
   );
 
   useFrame(() => {
-    const store = usePresenceStore.getState();
-    // Pulse opacity slightly with energy
-    mat.opacity = 0.1 + store.emotional.energy * 0.12;
+    mat.opacity = 0.14 + usePresenceStore.getState().emotional.energy * 0.14;
   });
 
   return (
-    <mesh ref={meshRef} geometry={geo} material={mat} position={[0, 0, -0.1]} />
+    <mesh
+      ref={meshRef}
+      geometry={geo}
+      material={mat}
+      position={[0, 0, -0.05]}
+    />
   );
 }

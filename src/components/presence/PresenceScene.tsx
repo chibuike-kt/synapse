@@ -12,7 +12,7 @@ import { BlendFunction } from "postprocessing";
 import { Suspense, useMemo } from "react";
 import { Color, Vector2 } from "three";
 import { getTierConfig } from "@/lib/hardware-tier";
-import { ParticleField } from "./ParticleField";
+import { WaveSphere } from "./WaveSphere";
 import { OrbCore } from "./OrbCore";
 
 export function PresenceScene() {
@@ -21,13 +21,13 @@ export function PresenceScene() {
     return getTierConfig();
   }, []);
 
-  const sceneBackground = useMemo(() => new Color("#03040a"), []);
+  const bg = useMemo(() => new Color("#03040a"), []);
 
   return (
     <Canvas
       camera={{ position: [0, 0, 3.2], fov: 42, near: 0.1, far: 100 }}
       dpr={config?.pixelRatio ?? 2}
-      scene={{ background: sceneBackground }}
+      scene={{ background: bg }}
       gl={{
         antialias: false,
         alpha: false,
@@ -35,38 +35,32 @@ export function PresenceScene() {
         stencil: false,
         depth: true,
       }}
-      style={{
-        position: "fixed",
-        top: 0,
-        left: 0,
-        width: "100vw",
-        height: "100vh",
-      }}
+      style={{ position: "fixed", inset: 0 }}
     >
       <Suspense fallback={null}>
         <OrbCore />
-        <ParticleField />
+        <WaveSphere />
 
         {config?.enablePostProcessing && (
           <EffectComposer multisampling={0}>
             {config.enableBloom && (
               <Bloom
-                intensity={0.4}
-                luminanceThreshold={0.6}
-                luminanceSmoothing={0.9}
+                intensity={1.2}
+                luminanceThreshold={0.18}
+                luminanceSmoothing={0.92}
                 mipmapBlur
               />
             )}
             {config.enableChromaticAberration && (
               <ChromaticAberration
                 blendFunction={BlendFunction.NORMAL}
-                offset={new Vector2(0.0008, 0.0008)}
+                offset={new Vector2(0.0006, 0.0006)}
                 radialModulation={false}
                 modulationOffset={0}
               />
             )}
-            <Noise opacity={0.028} blendFunction={BlendFunction.ADD} />
-            <Vignette eskil={false} offset={0.12} darkness={0.55} />
+            <Noise opacity={0.032} blendFunction={BlendFunction.ADD} />
+            <Vignette eskil={false} offset={0.1} darkness={0.65} />
           </EffectComposer>
         )}
       </Suspense>
