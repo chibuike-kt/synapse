@@ -17,7 +17,7 @@ const STATE_INT: Record<string, number> = {
   alert: 7,
 };
 
-const PARTICLE_COUNT = 18000;
+const PARTICLE_COUNT = 8000;
 
 // Fibonacci sphere — evenly distributed points on sphere surface
 function fibonacciSphere(count: number, radius: number): Float32Array {

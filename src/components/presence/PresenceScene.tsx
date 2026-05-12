@@ -26,7 +26,7 @@ export function PresenceScene() {
   return (
     <Canvas
       camera={{ position: [0, 0, 3.2], fov: 42, near: 0.1, far: 100 }}
-      dpr={config?.pixelRatio ?? 2}
+      dpr={Math.min(config?.pixelRatio ?? 1.5, 2)}
       scene={{ background: bg }}
       gl={{
         antialias: false,
@@ -34,6 +34,17 @@ export function PresenceScene() {
         powerPreference: "high-performance",
         stencil: false,
         depth: true,
+        failIfMajorPerformanceCaveat: false,
+      }}
+      onCreated={({ gl }) => {
+        const canvas = gl.domElement;
+        canvas.addEventListener("webglcontextlost", (e) => {
+          e.preventDefault();
+          console.warn("[Synapse] WebGL context lost — will attempt restore");
+        });
+        canvas.addEventListener("webglcontextrestored", () => {
+          console.info("[Synapse] WebGL context restored");
+        });
       }}
       style={{ position: "fixed", inset: 0 }}
     >
